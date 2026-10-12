@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MimirEngine</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --accent: #3b5bdb; --accent-text: #ffffff; --ok: #2b8a3e; --warn: #b7791f; --bad: #c92a2a;
+    --mark: #fff3bf;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a93; --line: #34332f;
+      --accent: #748ffc; --accent-text: #10121a; --ok: #69db7c; --warn: #ffd43b; --bad: #ff8787;
+      --mark: #4a3f10;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .grow { flex: 1; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 16px; margin-bottom: 16px; }
+  input, textarea, select, button { font: inherit; color: inherit; }
+  input[type=text], input[type=password], textarea, select {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+  textarea { resize: vertical; min-height: 64px; }
+  button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 6px;
+           padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; }
+  #drop.over { border-color: var(--accent); }
+  .stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.err { color: var(--bad); font-size: 12px; max-width: 320px; overflow-wrap: anywhere; }
+  .pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .s-ready { color: var(--ok); } .s-failed { color: var(--bad); }
+  .s-queued, .s-processing, .s-retrying { color: var(--warn); }
+  .answer { white-space: pre-wrap; margin: 12px 0; }
+  .cite { border-left: 3px solid var(--accent); padding: 4px 10px; margin: 8px 0; font-size: 13px; }
+  .cite mark { background: var(--mark); color: inherit; }
+  .error { color: var(--bad); }
+  .link { background: none; color: var(--accent); padding: 0; border: 0; text-decoration: underline; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>MimirEngine</h1>
+    <span class="muted grow">Document ingestion and question answering</span>
+    <div class="row" style="width: 260px">
+      <input id="apikey" type="password" placeholder="API key (if required)" autocomplete="off">
+    </div>
+  </header>
+
+  <section>
+    <h2>Ask</h2>
+    <textarea id="question" placeholder="Ask a question about your documents…"></textarea>
+    <div class="row" style="margin-top: 8px">
+      <button id="ask">Ask</button>
+      <button id="search" class="secondary">Search only</button>
+      <span id="ask-status" class="muted"></span>
+    </div>
+    <div id="result"></div>
+  </section>
+
+  <section>
+    <h2>Upload</h2>
+    <div id="drop">Drop files here or click to choose — txt, md, csv, json, html, pdf</div>
+    <input id="files" type="file" multiple hidden>
+    <div id="upload-status" class="muted" style="margin-top: 8px"></div>
+  </section>
+
+  <section>
+    <div class="row" style="margin-bottom: 12px">
+      <h2 style="margin: 0">Documents</h2>
+      <span class="grow"></span>
+      <select id="filter" style="width: auto">
+        <option value="">All</option><option>queued</option><option>processing</option>
+        <option>ready</option><option>retrying</option><option>failed</option>
+      </select>
+      <button id="refresh" class="secondary">Refresh</button>
+    </div>
+    <div id="stats" class="stats muted"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Status</th><th>Chunks</th><th>Updated</th><th>Error</th><th></th></tr></thead>
+        <tbody id="docs"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top: 8px"><button id="more" class="secondary" hidden>Load more</button></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+$("apikey").value = store.get("mimir-api-key");
+$("apikey").addEventListener("change", () => { store.set("mimir-api-key", $("apikey").value); refresh(); });
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  const key = $("apikey").value.trim();
+  if (key) headers["X-API-Key"] = key;
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 204) return null;
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : `${res.status} ${res.statusText}`);
+  return body;
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const when = (t) => t ? new Date(t * 1000).toLocaleString() : "";
+
+// --- ask / search ---------------------------------------------------------
+async function ask(searchOnly) {
+  const q = $("question").value.trim();
+  if (!q) return;
+  $("ask").disabled = $("search").disabled = true;
+  $("ask-status").textContent = searchOnly ? "Searching…" : "Thinking…";
+  $("result").innerHTML = "";
+  try {
+    if (searchOnly) {
+      const r = await api("/query", { method: "POST", headers: { "content-type": "application/json" },
+                                       body: JSON.stringify({ query: q, top_k: 8 }) });
+      $("result").innerHTML = r.results.length ? r.results.map((h) =>
+        `<div class="cite"><strong>${esc(h.metadata.filename)}</strong>
+         <span class="muted">chunk ${h.chunk_index} · score ${h.score.toFixed(3)}</span><br>${esc(h.text)}</div>`
+      ).join("") : `<p class="muted">No matches.</p>`;
+    } else {
+      const r = await api("/ask", { method: "POST", headers: { "content-type": "application/json" },
+                                     body: JSON.stringify({ question: q }) });
+      const cites = r.citations.map((c) =>
+        `<div class="cite">${c.ref ? `<strong>[${c.ref}]</strong> ` : ""}<strong>${esc(c.filename)}</strong> <span class="muted">chunk ${c.chunk_index}</span><br>
+         <mark>${esc(c.cited_text)}</mark></div>`).join("");
+      $("result").innerHTML = `<div class="answer">${esc(r.answer)}</div>` +
+        (cites ? `<h2>Citations</h2>${cites}` : "") +
+        (r.model ? `<p class="muted" style="font-size: 12px">Answered by ${esc(r.model)}</p>` : "");
+    }
+  } catch (e) {
+    $("result").innerHTML = `<p class="error">${esc(e.message)}</p>`;
+  } finally {
+    $("ask").disabled = $("search").disabled = false;
+    $("ask-status").textContent = "";
+  }
+}
+$("ask").onclick = () => ask(false);
+$("search").onclick = () => ask(true);
+$("question").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask(false);
+});
+
+// --- upload ---------------------------------------------------------------
+async function upload(fileList) {
+  if (!fileList.length) return;
+  const form = new FormData();
+  for (const f of fileList) form.append("files", f);
+  $("upload-status").textContent = `Uploading ${fileList.length} file(s)…`;
+  try {
+    const docs = await api("/documents", { method: "POST", body: form });
+    $("upload-status").textContent = `Queued ${docs.length} file(s) for ingestion.`;
+    refresh();
+  } catch (e) {
+    $("upload-status").innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+const drop = $("drop");
+drop.onclick = () => $("files").click();
+$("files").onchange = (e) => { upload(e.target.files); e.target.value = ""; };
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files); });
+
+// --- documents ------------------------------------------------------------
+let cursor = null;
+function row(d) {
+  return `<tr>
+    <td>${esc(d.filename)}<br><span class="muted" style="font-size: 12px">${esc(d.doc_id)}</span></td>
+    <td><span class="pill s-${esc(d.status)}">${esc(d.status)}</span>${d.attempt ? ` <span class="muted">#${d.attempt}</span>` : ""}</td>
+    <td>${d.chunks ?? ""}</td>
+    <td class="muted">${when(d.updated_at)}</td>
+    <td class="err">${esc(d.error || "")}</td>
+    <td><button class="link" data-del="${esc(d.doc_id)}">Delete</button></td>
+  </tr>`;
+}
+async function loadDocs(append) {
+  const params = new URLSearchParams({ limit: "50" });
+  if ($("filter").value) params.set("status", $("filter").value);
+  if (append && cursor) params.set("cursor", cursor);
+  try {
+    const r = await api(`/documents?${params}`);
+    cursor = r.next_cursor;
+    const html = r.documents.map(row).join("");
+    $("docs").innerHTML = append ? $("docs").innerHTML + html
+      : (html || `<tr><td colspan="6" class="muted">No documents yet.</td></tr>`);
+    $("more").hidden = !cursor;
+  } catch (e) {
+    $("docs").innerHTML = `<tr><td colspan="6" class="error">${esc(e.message)}</td></tr>`;
+  }
+}
+async function loadStats() {
+  try {
+    const r = await api("/stats");
+    $("stats").innerHTML = Object.entries(r.documents).filter(([k]) => k !== "deleted")
+      .map(([k, v]) => `<span><strong>${v}</strong> ${k}</span>`).join("");
+  } catch { $("stats").textContent = ""; }
+}
+function refresh() { loadDocs(false); loadStats(); }
+$("refresh").onclick = refresh;
+$("filter").onchange = refresh;
+$("more").onclick = () => loadDocs(true);
+$("docs").addEventListener("click", async (e) => {
+  const id = e.target.dataset && e.target.dataset.del;
+  if (!id || !confirm("Delete this document and its index entries?")) return;
+  try { await api(`/documents/${id}`, { method: "DELETE" }); refresh(); }
+  catch (err) { alert(err.message); }
+});
+refresh();
+setInterval(() => { if (!document.hidden && !cursor) refresh(); }, 5000);
+</script>
+</body>
+</html>
