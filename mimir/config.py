@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +46,19 @@ class Settings(BaseSettings):
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 150
+
+    # Answer generation (POST /ask) with Claude
+    llm_model: str = "claude-opus-5-5"
+    llm_effort: str = "medium"  # low | medium | high | xhigh | max
+    llm_max_tokens: int = 16000
+    # Falls back to the Anthropic SDK's own credential resolution when unset.
+    anthropic_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("MIMIR_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
+    )
+
+    # API
+    api_key: str | None = None  # when set, every endpoint except /health requires it
+    max_upload_mb: int = 100
 
 
 @lru_cache

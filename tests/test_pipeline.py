@@ -10,11 +10,11 @@ from mimir.api import Services, create_app
 from mimir.config import Settings
 from mimir.embeddings import HashEmbedder, OpenAIEmbedder, RateLimiter
 from mimir.errors import FatalError, PermanentError, RateLimitError, TransientError
-from mimir.messages import IngestJob
+from mimir.messages import IngestJob, doc_id_for_object
 from mimir.pipeline import Pipeline
 from mimir.worker import Worker, route_failure
 
-from .fakes import FakeConsumer, FakeMessage, FakeObjects, FakePublisher, FakeVectors
+from .fakes import FakeConsumer, FakeMessage, FakeObjects, FakePublisher, FakeVectors, memory_status
 
 SETTINGS = Settings(_env_file=None, chunk_size=200, chunk_overlap=20, embedding_batch_size=4, max_attempts=3)
 DOC = str(uuid.uuid4())
@@ -199,9 +199,10 @@ def test_http_embedder_requires_key():
 # --- API --------------------------------------------------------------------
 
 
-def api_client(publisher=None):
+def api_client(publisher=None, settings=SETTINGS, answerer=None):
     objects, vectors = FakeObjects(), FakeVectors()
-    svc = Services(SETTINGS, objects, publisher or FakePublisher(), HashEmbedder(), vectors)
+    svc = Services(settings, objects, publisher or FakePublisher(), HashEmbedder(), vectors,
+                   memory_status(settings), answerer)
     return TestClient(create_app(lambda: svc)), svc
 
 
@@ -215,12 +216,17 @@ def test_api_upload_stores_and_queues():
         assert [d["filename"] for d in docs] == ["a.txt", "b.md"]  # path stripped
         assert len(svc.publisher.published) == 2
         assert svc.objects.objects[(SETTINGS.s3_bucket, docs[0]["key"])] == b"alpha"
+        # Same doc_id that `mimir enqueue` would derive, so re-queuing never duplicates.
+        assert docs[0]["doc_id"] == doc_id_for_object(SETTINGS.s3_bucket, docs[0]["key"])
+        assert svc.status.get(docs[0]["doc_id"]).status == "queued"
 
 
 def test_api_upload_reports_queue_outage():
     with api_client(FakePublisher(fail=True))[0] as client:
         r = client.post("/documents", files=[("files", ("a.txt", b"alpha", "text/plain"))])
         assert r.status_code == 503
+        (doc,), _ = client.app.state.services.status.list()
+        assert doc.status == "failed" and "queue unavailable" in doc.error
 
 
 def test_api_query_end_to_end_with_pipeline():
