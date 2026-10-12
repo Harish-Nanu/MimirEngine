@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     # Answer generation (POST /ask): "claude" (API key) or "ollama" (local model, no key)
     llm_provider: str = "claude"
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:4b"
-    ollama_num_ctx: int = 8192
+    ollama_model: str = "qwen3:4b-instruct"
+    ollama_num_ctx: int = 4096  # fits 8 chunks of 1000 chars; larger spills a 4 GB GPU onto the CPU
 
     # Claude
     llm_model: str = "claude-opus-5-5"

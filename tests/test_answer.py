@@ -181,3 +181,10 @@ def test_build_answerer_picks_provider():
     assert isinstance(build_answerer(SETTINGS.model_copy(update={"llm_provider": "ollama"})), OllamaAnswerer)
     with pytest.raises(FatalError, match="unknown"):
         build_answerer(SETTINGS.model_copy(update={"llm_provider": "gpt"}))
+
+
+def test_ollama_strips_reasoning_from_thinking_models():
+    reply = {"message": {"content": "The user wants X [9]. Let me think.\n</think>\n\nSeven days [1]."}}
+    a, _ = ollama(lambda r: httpx.Response(200, json=reply))
+    ans = a.answer("q", HITS)
+    assert ans.text == "Seven days [1]." and [c.ref for c in ans.citations] == [1]
