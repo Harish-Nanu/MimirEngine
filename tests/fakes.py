@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import math
 
+from qdrant_client import QdrantClient
+
 from mimir.errors import TransientError
+from mimir.status import QdrantStatusStore
 from mimir.vectorstore import Chunk, SearchHit
+
+
+def memory_status(settings) -> QdrantStatusStore:
+    """The real status store on qdrant-client's in-process mode."""
+    store = QdrantStatusStore(settings, client=QdrantClient(location=":memory:"))
+    store.ensure_collection()
+    return store
 
 
 class FakeObjects:
@@ -18,6 +28,12 @@ class FakeObjects:
     def get(self, bucket, key):
         return self.objects[(bucket, key)]
 
+    def delete(self, bucket, key):
+        self.objects.pop((bucket, key), None)
+
+    def ping(self):
+        pass
+
 
 class FakeVectors:
     def __init__(self):
@@ -27,6 +43,12 @@ class FakeVectors:
         self.points = {pid: c for pid, c in self.points.items() if c.doc_id != doc_id}
         for c in chunks:
             self.points[c.point_id] = c
+
+    def delete_document(self, doc_id):
+        self.replace_document(doc_id, [])
+
+    def ping(self):
+        pass
 
     def search(self, vector, top_k, doc_id=None):
         def cos(a, b):
@@ -49,6 +71,10 @@ class FakePublisher:
         self.sent.append((topic, value, headers or {}))
 
     def flush(self, failures, timeout=30.0):
+        if self.fail:
+            raise TransientError("broker down")
+
+    def ping(self):
         if self.fail:
             raise TransientError("broker down")
 

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_collection: str = "mimir_chunks"
+    documents_collection: str = "mimir_documents"  # per-document ingestion status
 
     # Embeddings: "local" | "openai" | "voyage" | "hash" (hash is for tests only)
     embedding_provider: str = "local"

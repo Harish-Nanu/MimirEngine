@@ -9,6 +9,8 @@ Routing:
   other error, attempts left  -> retry topic, with exponential backoff (not_before)
   other error, out of attempts-> DLQ
   FatalError                  -> stop the worker without committing
+
+Each step is mirrored to the status store. Jobs for documents deleted through the API are skipped.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from .errors import FatalError, PermanentError
 from .messages import IngestJob
 from .pipeline import Pipeline
 from .queue import JobPublisher
+from .status import DELETED, FAILED, PROCESSING, READY, RETRYING, DocumentStatus
 
 log = logging.getLogger(__name__)
 
@@ -47,11 +50,13 @@ def route_failure(job: IngestJob, exc: Exception, settings: Settings) -> Route:
 
 
 class Worker:
-    def __init__(self, settings: Settings, pipeline: Pipeline, publisher: JobPublisher, consumer=None):
+    def __init__(self, settings: Settings, pipeline: Pipeline, publisher: JobPublisher, consumer=None,
+                 status=None):
         self.settings = settings
         self.pipeline = pipeline
         self.publisher = publisher
         self.consumer = consumer
+        self.status = status  # QdrantStatusStore-like, optional
         self._paused: dict[tuple[str, int], float] = {}
         self._running = True
 
@@ -106,21 +111,54 @@ class Worker:
             self._defer(msg, job.not_before)
             return
 
+        if self._is_deleted(job.doc_id):
+            log.info("doc=%s was deleted, skipping job", job.doc_id)
+            self._commit(msg)
+            return
+        self._mark(job, PROCESSING)
+
         try:
-            self.pipeline.process(job)
+            chunks = self.pipeline.process(job)
+            if self.status is not None:
+                if self._is_deleted(job.doc_id):  # deleted while we were processing it
+                    self.pipeline.vectors.delete_document(job.doc_id)
+                else:
+                    # Inside the try: if this fails the job is retried, which is idempotent.
+                    self.status.put(DocumentStatus.for_job(job, READY, chunks=chunks))
         except FatalError:
             raise
         except Exception as exc:
             route = route_failure(job, exc, self.settings)
-            level = logging.WARNING if route.topic == self.settings.retry_topic else logging.ERROR
-            log.log(level, "doc=%s attempt=%d -> %s: %s", job.doc_id, job.attempt, route.topic, exc)
-            self._dispatch(msg, lambda f: self.publisher.send(
-                route.topic, route.job.to_bytes(), route.job.doc_id, f))
+            retrying = route.topic == self.settings.retry_topic
+            log.log(logging.WARNING if retrying else logging.ERROR,
+                    "doc=%s attempt=%d -> %s: %s", job.doc_id, job.attempt, route.topic, exc)
+            if self._dispatch(msg, lambda f: self.publisher.send(
+                    route.topic, route.job.to_bytes(), route.job.doc_id, f)):
+                self._mark(route.job, RETRYING if retrying else FAILED, error=route.job.last_error)
             return
 
         self._commit(msg)
 
-    def _dispatch(self, msg, send) -> None:
+    def _is_deleted(self, doc_id: str) -> bool:
+        if self.status is None:
+            return False
+        try:
+            current = self.status.get(doc_id)
+        except Exception as exc:  # status is advisory here; don't block ingestion on it
+            log.warning("status lookup failed for doc=%s: %s", doc_id, exc)
+            return False
+        return current is not None and current.status == DELETED
+
+    def _mark(self, job: IngestJob, status: str, **kw) -> None:
+        """Best-effort status update for intermediate states."""
+        if self.status is None:
+            return
+        try:
+            self.status.put(DocumentStatus.for_job(job, status, **kw))
+        except Exception as exc:
+            log.warning("status update to %s failed for doc=%s: %s", status, job.doc_id, exc)
+
+    def _dispatch(self, msg, send) -> bool:
         """Send to retry/DLQ, and commit only once Kafka has acknowledged it."""
         failures: list[str] = []
         try:
@@ -130,8 +168,9 @@ class Worker:
             log.error("could not route failed job, will reprocess: %s", exc)
             self._rewind(msg)
             time.sleep(5)
-            return
+            return False
         self._commit(msg)
+        return True
 
     def _commit(self, msg) -> None:
         self.consumer.commit(message=msg, asynchronous=False)
