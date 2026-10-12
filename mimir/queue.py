@@ -53,6 +53,9 @@ class JobPublisher:
         if failures:
             raise TransientError(f"Kafka delivery failed: {failures[0]}")
 
+    def ping(self) -> None:
+        self.producer.list_topics(timeout=5)
+
     def publish(self, jobs: list[IngestJob]) -> None:
         failures: list[str] = []
         for job in jobs:

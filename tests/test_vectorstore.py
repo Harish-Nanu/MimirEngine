@@ -43,3 +43,10 @@ def test_ensure_collection_is_idempotent_and_checks_dimension(store):
     store.ensure_collection(256)
     with pytest.raises(FatalError, match="dimension"):
         store.ensure_collection(384)
+
+
+def test_delete_document(store):
+    a = str(uuid.uuid4())
+    store.replace_document(a, chunks(a, ["one", "two"]))
+    store.delete_document(a)
+    assert store.search(HashEmbedder().embed_query("one"), top_k=10, doc_id=a) == []

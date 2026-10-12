@@ -88,14 +88,29 @@ class QdrantStore:
         except Exception as exc:
             raise _classify(exc) from exc
 
+    def delete_document(self, doc_id: str) -> None:
+        from qdrant_client import models
+
+        try:
+            self.client.delete(
+                self.collection,
+                points_selector=models.FilterSelector(filter=_doc_filter(doc_id)),
+                wait=True,
+            )
+        except Exception as exc:
+            raise _classify(exc) from exc
+
     def search(self, vector: list[float], top_k: int, doc_id: str | None = None) -> list[SearchHit]:
-        result = self.client.query_points(
-            self.collection,
-            query=vector,
-            limit=top_k,
-            query_filter=_doc_filter(doc_id) if doc_id else None,
-            with_payload=True,
-        )
+        try:
+            result = self.client.query_points(
+                self.collection,
+                query=vector,
+                limit=top_k,
+                query_filter=_doc_filter(doc_id) if doc_id else None,
+                with_payload=True,
+            )
+        except Exception as exc:
+            raise _classify(exc) from exc
         hits = []
         for p in result.points:
             payload = dict(p.payload or {})
@@ -110,6 +125,9 @@ class QdrantStore:
             )
         return hits
 
+    def ping(self) -> None:
+        self.client.collection_exists(self.collection)
+
 
 def _doc_filter(doc_id: str):
     from qdrant_client import models
@@ -122,5 +140,5 @@ def _classify(exc: Exception) -> Exception:
 
     if isinstance(exc, UnexpectedResponse) and exc.status_code in (400, 404):
         # Wrong vector size or missing collection: configuration, not this document.
-        return FatalError(f"qdrant rejected write ({exc.status_code}): {exc.content[:300]!r}")
-    return TransientError(f"qdrant write failed: {exc}")
+        return FatalError(f"qdrant rejected request ({exc.status_code}): {exc.content[:300]!r}")
+    return TransientError(f"qdrant request failed: {exc}")

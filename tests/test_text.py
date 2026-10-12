@@ -83,3 +83,10 @@ def test_job_roundtrip_and_malformed():
 def test_doc_id_is_stable_per_object():
     assert doc_id_for_object("b", "k") == doc_id_for_object("b", "k")
     assert doc_id_for_object("b", "k") != doc_id_for_object("b", "k2")
+
+
+def test_is_supported():
+    from mimir.extract import is_supported
+
+    assert is_supported("a.PDF") and is_supported("notes.md") and is_supported("x", "text/plain")
+    assert not is_supported("prog.exe", "application/octet-stream")

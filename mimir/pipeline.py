@@ -20,6 +20,8 @@ from .vectorstore import Chunk
 
 log = logging.getLogger(__name__)
 
+MAX_RETRY_AFTER_S = 60.0
+
 
 class ObjectStore(Protocol):
     def get(self, bucket: str, key: str) -> bytes: ...
@@ -27,6 +29,8 @@ class ObjectStore(Protocol):
 
 class VectorStore(Protocol):
     def replace_document(self, doc_id: str, chunks: list[Chunk]) -> None: ...
+
+    def delete_document(self, doc_id: str) -> None: ...
 
 
 class Pipeline:
@@ -75,7 +79,8 @@ class Pipeline:
                 if attempt == self.inline_retries:
                     raise
                 if isinstance(exc, RateLimitError) and exc.retry_after:
-                    delay = exc.retry_after
+                    # Capped so a long Retry-After can't stall past Kafka's max.poll.interval.ms.
+                    delay = min(exc.retry_after, MAX_RETRY_AFTER_S)
                 else:
                     delay = min(30.0, 2**attempt) * (0.5 + random.random() / 2)
                 log.warning("embedding retry %d in %.1fs: %s", attempt + 1, delay, exc)

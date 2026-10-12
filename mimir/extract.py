@@ -13,6 +13,16 @@ TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".log"}
 HTML_EXTENSIONS = {".html", ".htm"}
 
 
+def is_supported(filename: str, content_type: str | None = None) -> bool:
+    ext = os.path.splitext(filename)[1].lower()
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    return (
+        ext in TEXT_EXTENSIONS | HTML_EXTENSIONS | {".pdf", ".json"}
+        or ctype in ("application/pdf", "application/json")
+        or ctype.startswith("text/")
+    )
+
+
 def extract_text(data: bytes, filename: str, content_type: str | None = None) -> str:
     ext = os.path.splitext(filename)[1].lower()
     ctype = (content_type or "").split(";")[0].strip().lower()

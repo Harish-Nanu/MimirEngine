@@ -25,14 +25,27 @@ class MinioStore:
             self.client.make_bucket(bucket)
 
     def put(self, bucket: str, key: str, stream: BinaryIO, content_type: str | None) -> None:
-        self.client.put_object(
-            bucket,
-            key,
-            stream,
-            length=-1,
-            part_size=10 * 1024 * 1024,
-            content_type=content_type or "application/octet-stream",
-        )
+        from minio.error import S3Error
+
+        try:
+            self.client.put_object(
+                bucket,
+                key,
+                stream,
+                length=-1,
+                part_size=10 * 1024 * 1024,
+                content_type=content_type or "application/octet-stream",
+            )
+        except (S3Error, OSError) as exc:
+            raise TransientError(f"could not store s3://{bucket}/{key}: {exc}") from exc
+
+    def delete(self, bucket: str, key: str) -> None:
+        from minio.error import S3Error
+
+        try:
+            self.client.remove_object(bucket, key)
+        except (S3Error, OSError) as exc:
+            raise TransientError(f"could not delete s3://{bucket}/{key}: {exc}") from exc
 
     def get(self, bucket: str, key: str) -> bytes:
         from minio.error import S3Error
@@ -55,3 +68,6 @@ class MinioStore:
         for obj in self.client.list_objects(bucket, prefix=prefix, recursive=True):
             if not obj.is_dir:
                 yield obj.object_name
+
+    def ping(self) -> None:
+        self.client.list_buckets()
