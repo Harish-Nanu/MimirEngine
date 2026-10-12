@@ -47,7 +47,13 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
 
-    # Answer generation (POST /ask) with Claude
+    # Answer generation (POST /ask): "claude" (API key) or "ollama" (local model, no key)
+    llm_provider: str = "claude"
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen3:4b"
+    ollama_num_ctx: int = 8192
+
+    # Claude
     llm_model: str = "claude-opus-5-5"
     llm_effort: str = "medium"  # low | medium | high | xhigh | max
     llm_max_tokens: int = 16000

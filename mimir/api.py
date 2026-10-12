@@ -34,11 +34,11 @@ class Services:
     embedder: Embedder
     vectors: object  # QdrantStore-like: search(), delete_document(), ping()
     status: object  # QdrantStatusStore-like
-    answerer: object | None = None  # ClaudeAnswerer-like; None when Claude isn't configured
+    answerer: object | None = None  # ClaudeAnswerer/OllamaAnswerer-like; None when not configured
 
 
 def default_services() -> Services:
-    from .answer import ClaudeAnswerer
+    from .answer import build_answerer
     from .embeddings import build_embedder
     from .queue import JobPublisher
     from .status import QdrantStatusStore
@@ -47,7 +47,7 @@ def default_services() -> Services:
 
     settings = get_settings()
     try:
-        answerer = ClaudeAnswerer(settings)
+        answerer = build_answerer(settings)
     except FatalError as exc:
         log.warning("POST /ask disabled: %s", exc)
         answerer = None
@@ -102,6 +102,7 @@ class CitationOut(BaseModel):
     chunk_index: int
     filename: str
     cited_text: str
+    ref: int | None = None
 
 
 class AskResponse(BaseModel):
@@ -170,8 +171,15 @@ def create_app(services_factory: Callable[[], Services] = default_services) -> F
                 checks[name] = "ok"
             except Exception as exc:
                 checks[name] = f"error: {exc}"
-        checks["claude"] = "ok" if svc.answerer is not None else "not configured"
-        ok = all(v == "ok" for k, v in checks.items() if k != "claude")
+        if svc.answerer is None:
+            checks["llm"] = "not configured"
+        else:
+            try:
+                svc.answerer.ping()
+                checks["llm"] = "ok"
+            except Exception as exc:
+                checks["llm"] = f"error: {exc}"
+        ok = all(v == "ok" for k, v in checks.items() if k != "llm")
         return JSONResponse({"status": "ok" if ok else "degraded", "checks": checks},
                             status.HTTP_200_OK if ok else status.HTTP_503_SERVICE_UNAVAILABLE)
 
@@ -254,7 +262,8 @@ def create_app(services_factory: Callable[[], Services] = default_services) -> F
     def ask(req: AskRequest, svc: Services = Depends(services)):
         if svc.answerer is None:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                                "Claude is not configured: set ANTHROPIC_API_KEY and restart the API")
+                                "answers are not configured: set ANTHROPIC_API_KEY, or MIMIR_LLM_PROVIDER=ollama, "
+                                "and restart the API")
         hits = _search(svc, req.question, req.top_k, req.doc_id)
         answer = svc.answerer.answer(req.question, hits)
         return AskResponse(

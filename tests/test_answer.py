@@ -4,10 +4,11 @@ import json
 import uuid
 
 import anthropic
+import httpx
 import httpx2
 import pytest
 
-from mimir.answer import ClaudeAnswerer
+from mimir.answer import ClaudeAnswerer, OllamaAnswerer, build_answerer
 from mimir.errors import FatalError, RateLimitError, TransientError
 from mimir.pipeline import Pipeline
 from mimir.vectorstore import SearchHit
@@ -119,3 +120,64 @@ def test_ask_endpoint_end_to_end():
 def test_ask_without_claude_is_503():
     with api_client()[0] as client:
         assert client.post("/ask", json={"question": "q"}).status_code == 503
+
+
+# --- Ollama -----------------------------------------------------------------
+
+
+def ollama(handler, model="qwen3:4b"):
+    sent = []
+
+    def record(request):
+        sent.append(request)
+        return handler(request)
+
+    settings = SETTINGS.model_copy(update={"llm_provider": "ollama", "ollama_model": model})
+    client = httpx.Client(base_url="http://ollama", transport=httpx.MockTransport(record))
+    return OllamaAnswerer(settings, client=client), sent
+
+
+def test_ollama_numbers_sources_and_maps_markers():
+    reply = {"message": {"role": "assistant", "content": "Seven days [1]. Also S3 [2][2][9]."},
+             "done_reason": "stop"}
+    a, sent = ollama(lambda r: httpx.Response(200, json=reply))
+    ans = a.answer("How long?", HITS)
+
+    assert ans.text.startswith("Seven days [1]") and ans.model == "ollama/qwen3:4b"
+    assert [(c.ref, c.doc_id) for c in ans.citations] == [(1, DOC_A), (2, DOC_B)]  # [9] is out of range
+
+    body = json.loads(sent[0].content)
+    assert body["model"] == "qwen3:4b" and body["stream"] is False and body["think"] is False
+    prompt = body["messages"][1]["content"]
+    assert "[1] kafka.md" in prompt and "[2] minio.txt" in prompt and prompt.endswith("Question: How long?")
+
+
+@pytest.mark.parametrize("status,exc", [(404, FatalError), (500, TransientError), (400, FatalError)])
+def test_ollama_error_mapping(status, exc):
+    a, _ = ollama(lambda r: httpx.Response(status, json={"error": "x"}))
+    with pytest.raises(exc):
+        a.answer("q", HITS)
+
+
+def test_ollama_unreachable_is_transient():
+    def refuse(request):
+        raise httpx.ConnectError("refused")
+
+    a, _ = ollama(refuse)
+    with pytest.raises(TransientError):
+        a.answer("q", HITS)
+
+
+def test_ollama_ping_checks_model_is_pulled():
+    tags = {"models": [{"name": "qwen3:4b", "model": "qwen3:4b"}]}
+    a, _ = ollama(lambda r: httpx.Response(200, json=tags))
+    a.ping()
+    b, _ = ollama(lambda r: httpx.Response(200, json=tags), model="llama3.2:3b")
+    with pytest.raises(FatalError, match="ollama pull llama3.2:3b"):
+        b.ping()
+
+
+def test_build_answerer_picks_provider():
+    assert isinstance(build_answerer(SETTINGS.model_copy(update={"llm_provider": "ollama"})), OllamaAnswerer)
+    with pytest.raises(FatalError, match="unknown"):
+        build_answerer(SETTINGS.model_copy(update={"llm_provider": "gpt"}))

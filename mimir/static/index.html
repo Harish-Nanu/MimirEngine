@@ -69,7 +69,7 @@
     <h2>Ask</h2>
     <textarea id="question" placeholder="Ask a question about your documents…"></textarea>
     <div class="row" style="margin-top: 8px">
-      <button id="ask">Ask Claude</button>
+      <button id="ask">Ask</button>
       <button id="search" class="secondary">Search only</button>
       <span id="ask-status" class="muted"></span>
     </div>
@@ -147,7 +147,7 @@ async function ask(searchOnly) {
       const r = await api("/ask", { method: "POST", headers: { "content-type": "application/json" },
                                      body: JSON.stringify({ question: q }) });
       const cites = r.citations.map((c) =>
-        `<div class="cite"><strong>${esc(c.filename)}</strong> <span class="muted">chunk ${c.chunk_index}</span><br>
+        `<div class="cite">${c.ref ? `<strong>[${c.ref}]</strong> ` : ""}<strong>${esc(c.filename)}</strong> <span class="muted">chunk ${c.chunk_index}</span><br>
          <mark>${esc(c.cited_text)}</mark></div>`).join("");
       $("result").innerHTML = `<div class="answer">${esc(r.answer)}</div>` +
         (cites ? `<h2>Citations</h2>${cites}` : "") +

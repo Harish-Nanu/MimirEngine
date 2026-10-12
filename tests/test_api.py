@@ -122,7 +122,7 @@ def test_upload_rejects_oversize_and_unsupported_before_storing():
 def test_ready_reports_each_dependency():
     with api_client()[0] as client:
         r = client.get("/ready")
-        assert r.status_code == 200 and r.json()["checks"]["claude"] == "not configured"
+        assert r.status_code == 200 and r.json()["checks"]["llm"] == "not configured"
     with api_client(FakePublisher(fail=True))[0] as client:
         r = client.get("/ready")
         assert r.status_code == 503 and r.json()["checks"]["kafka"].startswith("error")
