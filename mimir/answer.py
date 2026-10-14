@@ -141,6 +141,7 @@ OLLAMA_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 - Only cite source numbers that appear in the question."""
 
 CITE_MARK = re.compile(r"\[(\d+)\]")
+THINK_BLOCK = re.compile(r"^.*?</think>", re.DOTALL)
 
 
 class OllamaAnswerer:
@@ -189,7 +190,8 @@ class OllamaAnswerer:
             raise FatalError(f"Ollama rejected the request ({resp.status_code}): {resp.text[:300]}")
 
         body = resp.json()
-        text = body["message"]["content"].strip()
+        # Thinking-only models ignore "think": false and put their reasoning before </think>.
+        text = THINK_BLOCK.sub("", body["message"]["content"]).strip()
         citations, seen = [], set()
         for m in CITE_MARK.finditer(text):
             n = int(m.group(1))
